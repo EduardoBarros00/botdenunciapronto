@@ -1,76 +1,44 @@
-const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
-const { sequelize } = require('./models');
+const { Client, GatewayIntentBits, Partials, ChannelType } = require('discord.js');
+const { sequelize } = require('./models/Ticket');
+const config = require('./config');
 const fs = require('fs');
-const path = require('path');
 require('dotenv').config();
 
-// Criar cliente Discord
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds
-    ],
-    partials: [Partials.Channel, Partials.Message]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  partials: [Partials.Channel]
 });
 
-// Coleção de comandos
-client.commands = new Collection();
-
-// Carregar comandos
-const commandsPath = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-
-for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
-    
-    if ('data' in command && 'execute' in command) {
-        client.commands.set(command.data.name, command);
-        console.log(`✅ Comando carregado: ${command.data.name}`);
-    } else {
-        console.log(`⚠️ Comando ${file} não possui propriedades 'data' ou 'execute'`);
-    }
+client.commands = new Map();
+for (const file of fs.readdirSync('./commands')) {
+  const cmd = require(`./commands/${file}`);
+  client.commands.set(cmd.data.name, cmd);
+}
+for (const file of fs.readdirSync('./events')) {
+  const evt = require(`./events/${file}`);
+  client.on(evt.name, (...args) => evt.execute(...args));
 }
 
-// Carregar eventos
-const eventsPath = path.join(__dirname, 'events');
-const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
+client.once('ready', async () => {
+  await sequelize.sync();
 
-for (const file of eventFiles) {
-    const filePath = path.join(eventsPath, file);
-    const event = require(filePath);
-    
-    if (event.once) {
-        client.once(event.name, (...args) => event.execute(...args));
-    } else {
-        client.on(event.name, (...args) => event.execute(...args));
+  const guild = client.guilds.cache.first();
+  const cats = {};
+  for (const [key, name] of Object.entries(config.categories)) {
+    let cat = guild.channels.cache.find(c => c.name === name && c.type === ChannelType.GuildCategory);
+    if (!cat) {
+      cat = await guild.channels.create({ name, type: ChannelType.GuildCategory });
     }
-    console.log(`✅ Evento carregado: ${event.name}`);
-}
+    cats[key] = cat;
+  }
+  let logCh = guild.channels.cache.find(c => c.name === config.logChannelName && c.type === ChannelType.GuildText);
+  if (!logCh) {
+    logCh = await guild.channels.create({ name: config.logChannelName, type: ChannelType.GuildText });
+  }
+  client.cats = cats;
+  client.logChannel = logCh;
 
-// Inicializar banco de dados e bot
-async function startBot() {
-    try {
-        await sequelize.authenticate();
-        console.log('✅ Conexão com banco de dados estabelecida');
-        
-        await sequelize.sync();
-        console.log('✅ Modelos sincronizados com o banco');
-        
-        await client.login(process.env.TOKEN);
-    } catch (error) {
-        console.error('❌ Erro ao iniciar o bot:', error);
-        process.exit(1);
-    }
-}
-
-// Tratamento de erros não capturados
-process.on('unhandledRejection', error => {
-    console.error('❌ Rejeição não tratada:', error);
+  console.log(`✅ ${client.user.tag} online!`);
 });
 
-process.on('uncaughtException', error => {
-    console.error('❌ Exceção não capturada:', error);
-    process.exit(1);
-});
-
-startBot();
+client.login(process.env.TOKEN);
